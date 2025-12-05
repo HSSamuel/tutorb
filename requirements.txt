@@ -2,6 +2,14 @@ fastapi
 uvicorn
 python-dotenv
 langchain
-langchain-openai
 langchain-community
+langchain-core
+langchain-openai
+langchain-cohere
+langchain-text-splitters
+langchain-huggingface
+sentence-transformers
 supabase
+beautifulsoup4
+requests
+pypdf
