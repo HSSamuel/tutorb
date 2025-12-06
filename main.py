@@ -12,13 +12,8 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "https://aitutorng.netlify.app",      # Your main Netlify URL
-        "https://aitutorng.netlify.app/",     # With trailing slash (just in case)
-        "https://tutorb.onrender.com"
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],    # Allow ALL origins (Netlify, Localhost, www, etc.)
+    allow_credentials=False, # <--- Turn this OFF to allow "*"
     allow_methods=["*"],
     allow_headers=["*"],
 )
