@@ -10,9 +10,15 @@ load_dotenv()
 # 2. Setup App (Lightweight Startup)
 app = FastAPI()
 
+# 👇 UPDATE THIS SECTION
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    # Allow SPECIFIC domains (Localhost + Your Netlify App)
+    allow_origins=[
+        "http://localhost:3000",
+        "https://aitutorng.netlify.app", # <--- Your specific Frontend URL
+        "https://tutorb.onrender.com"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
