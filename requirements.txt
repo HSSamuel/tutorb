@@ -4,11 +4,7 @@ python-dotenv
 langchain
 langchain-community
 langchain-core
-langchain-openai
 langchain-cohere
-langchain-text-splitters
-langchain-huggingface
-sentence-transformers
 supabase
 beautifulsoup4
 requests

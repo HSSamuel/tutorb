@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -7,34 +7,28 @@ import os
 # 1. Load Env Vars
 load_dotenv()
 
-# 2. Setup App (Lightweight Startup)
+# 2. Setup App
 app = FastAPI()
 
+# "Public Mode" CORS - Allows everyone (Bulletproof for MVP)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],    # Allow ALL origins (Netlify, Localhost, www, etc.)
-    allow_credentials=False, # <--- Turn this OFF to allow "*"
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # 3. GLOBAL VARIABLES
-# We do NOT initialize them here. We wait until the first request.
 ai_tools = None
 
-# --- HELPER: ULTRA-LAZY LOADER ---
+# --- HELPER: CLOUD LOADER ---
 def get_ai_tools():
-    """
-    Imports and loads AI tools ONLY when needed.
-    This makes the server start instantly (<1 second).
-    """
     global ai_tools
     
     if ai_tools is None:
-        print("⏳ Importing Heavy Libraries (First Run Only)...")
-        # 👇 HEAVY IMPORTS MOVED INSIDE HERE
-        from langchain_huggingface import HuggingFaceEmbeddings
-        from langchain_cohere import ChatCohere
+        print("⏳ Connecting to Cloud AI...")
+        from langchain_cohere import ChatCohere, CohereEmbeddings # <--- USING COHERE FOR EVERYTHING
         from langchain_core.prompts import ChatPromptTemplate
         from supabase import create_client
         
@@ -44,16 +38,19 @@ def get_ai_tools():
         cohere_key = os.environ.get("COHERE_API_KEY")
         
         # Initialize
-        print("⏳ Connecting to Brain...")
         supabase = create_client(supabase_url, supabase_key)
         
-        print("⏳ Loading Embeddings...")
-        embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        # 👇 LIGHTWEIGHT: No local model loading! 
+        # We use 'embed-english-light-v3.0' because it is 384 dimensions (matches our DB)
+        print("⏳ Connecting to Cohere Embeddings API...")
+        embeddings = CohereEmbeddings(
+            model="embed-english-light-v3.0", 
+            cohere_api_key=cohere_key
+        )
         
-        print("⏳ Loading Cohere...")
+        print("⏳ Connecting to Cohere Chat API...")
         llm = ChatCohere(model="command-r-08-2024", cohere_api_key=cohere_key)
         
-        # Save to global variable
         ai_tools = {
             "supabase": supabase,
             "embeddings": embeddings,
@@ -68,8 +65,7 @@ def get_ai_tools():
 
 @app.get("/")
 def home():
-    # This endpoint is super fast, proving to Render that we are "Live"
-    return {"status": "AI Tutor Brain is Online 🧠", "mode": "Ultra-Lazy Loading"}
+    return {"status": "AI Tutor Brain is Online (Cloud Mode) ☁️"}
 
 class TopicRequest(BaseModel):
     subject: str
@@ -79,16 +75,15 @@ async def teach_topic(request: TopicRequest):
     print(f"🔍 Student asked about: {request.subject}")
 
     try:
-        # 1. LOAD TOOLS NOW
+        # 1. LOAD TOOLS
         tools = get_ai_tools()
-        
-        # Unpack tools
         supabase = tools["supabase"]
         embeddings = tools["embeddings"]
         llm = tools["llm"]
         ChatPromptTemplate = tools["PromptTemplate"]
 
-        # A. SEARCH (Retrieval)
+        # A. SEARCH (Retrieval via API)
+        # This now sends the text to Cohere, gets numbers back, then sends to Supabase
         query_vector = embeddings.embed_query(request.subject)
         
         response = supabase.rpc(

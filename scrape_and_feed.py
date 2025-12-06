@@ -1,9 +1,10 @@
 import os
 import requests
 from bs4 import BeautifulSoup
-from pypdf import PdfReader  # <--- NEW: For reading PDFs
+from pypdf import PdfReader
 from dotenv import load_dotenv
-from langchain_community.embeddings import HuggingFaceEmbeddings
+# 👇 CHANGED: Import Cohere to match your new Backend
+from langchain_cohere import CohereEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from supabase import create_client, Client
 
@@ -11,10 +12,17 @@ from supabase import create_client, Client
 load_dotenv()
 supabase_url = os.environ.get("SUPABASE_URL")
 supabase_key = os.environ.get("SUPABASE_SERVICE_KEY")
+cohere_key = os.environ.get("COHERE_API_KEY")
+
 supabase: Client = create_client(supabase_url, supabase_key)
 
-print("⏳ Loading AI Model...")
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+print("⏳ Connecting to Cloud Embeddings (Cohere)...")
+# 👇 CHANGED: We use the cloud model to save memory and match the backend
+# 'embed-english-light-v3.0' is 384 dimensions, fitting your database perfectly.
+embeddings = CohereEmbeddings(
+    model="embed-english-light-v3.0", 
+    cohere_api_key=cohere_key
+)
 
 # --- HELPER FUNCTIONS ---
 
@@ -69,6 +77,7 @@ def process_and_upload(text, source_name, region_tag="Global"):
 
     # Upload Loop
     for i, chunk in enumerate(chunks):
+        # This now calls the Cohere API (Cloud) instead of your CPU
         vector = embeddings.embed_query(chunk)
         
         # We append the source to the content so the AI knows where it learned this
