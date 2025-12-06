@@ -1,20 +1,13 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from langchain_huggingface import HuggingFaceEmbeddings # <--- Ensure this is the new import
-from langchain_cohere import ChatCohere
-from langchain_core.prompts import ChatPromptTemplate
-from supabase import create_client, Client
 from dotenv import load_dotenv
 import os
 
 # 1. Load Env Vars
 load_dotenv()
-supabase_url = os.environ.get("SUPABASE_URL")
-supabase_key = os.environ.get("SUPABASE_SERVICE_KEY")
-cohere_key = os.environ.get("COHERE_API_KEY")
 
-# 2. Setup App
+# 2. Setup App (Lightweight Startup)
 app = FastAPI()
 
 app.add_middleware(
@@ -25,36 +18,58 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 3. GLOBAL VARIABLES (Initialized as None)
-supabase: Client = create_client(supabase_url, supabase_key)
-embeddings = None
-llm = None
+# 3. GLOBAL VARIABLES
+# We do NOT initialize them here. We wait until the first request.
+ai_tools = None
 
-# --- HELPER: LAZY LOADER ---
+# --- HELPER: ULTRA-LAZY LOADER ---
 def get_ai_tools():
     """
-    Loads the AI models only if they aren't loaded yet.
-    This prevents the server from crashing during startup on Render.
+    Imports and loads AI tools ONLY when needed.
+    This makes the server start instantly (<1 second).
     """
-    global embeddings, llm
+    global ai_tools
     
-    if embeddings is None:
-        print("⏳ Lazy Loading Embeddings Model...")
+    if ai_tools is None:
+        print("⏳ Importing Heavy Libraries (First Run Only)...")
+        # 👇 HEAVY IMPORTS MOVED INSIDE HERE
+        from langchain_huggingface import HuggingFaceEmbeddings
+        from langchain_cohere import ChatCohere
+        from langchain_core.prompts import ChatPromptTemplate
+        from supabase import create_client
+        
+        # Load Keys
+        supabase_url = os.environ.get("SUPABASE_URL")
+        supabase_key = os.environ.get("SUPABASE_SERVICE_KEY")
+        cohere_key = os.environ.get("COHERE_API_KEY")
+        
+        # Initialize
+        print("⏳ Connecting to Brain...")
+        supabase = create_client(supabase_url, supabase_key)
+        
+        print("⏳ Loading Embeddings...")
         embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-        print("✅ Embeddings Loaded!")
         
-    if llm is None:
-        print("⏳ Lazy Loading Cohere...")
+        print("⏳ Loading Cohere...")
         llm = ChatCohere(model="command-r-08-2024", cohere_api_key=cohere_key)
-        print("✅ Cohere Loaded!")
         
-    return embeddings, llm
+        # Save to global variable
+        ai_tools = {
+            "supabase": supabase,
+            "embeddings": embeddings,
+            "llm": llm,
+            "PromptTemplate": ChatPromptTemplate
+        }
+        print("✅ AI Tools Ready!")
+        
+    return ai_tools
 
 # --- ENDPOINTS ---
 
 @app.get("/")
 def home():
-    return {"status": "AI Tutor Brain is Online 🧠", "mode": "Lazy Loading"}
+    # This endpoint is super fast, proving to Render that we are "Live"
+    return {"status": "AI Tutor Brain is Online 🧠", "mode": "Ultra-Lazy Loading"}
 
 class TopicRequest(BaseModel):
     subject: str
@@ -64,11 +79,17 @@ async def teach_topic(request: TopicRequest):
     print(f"🔍 Student asked about: {request.subject}")
 
     try:
-        # 1. LOAD AI TOOLS NOW (On the first request)
-        ai_embeddings, ai_llm = get_ai_tools()
+        # 1. LOAD TOOLS NOW
+        tools = get_ai_tools()
+        
+        # Unpack tools
+        supabase = tools["supabase"]
+        embeddings = tools["embeddings"]
+        llm = tools["llm"]
+        ChatPromptTemplate = tools["PromptTemplate"]
 
         # A. SEARCH (Retrieval)
-        query_vector = ai_embeddings.embed_query(request.subject)
+        query_vector = embeddings.embed_query(request.subject)
         
         response = supabase.rpc(
             "match_cultural_knowledge",
@@ -96,14 +117,14 @@ async def teach_topic(request: TopicRequest):
         INSTRUCTIONS FOR FORMATTING:
         1. Use **Bold** for key terms.
         2. Use Bullet points for steps or lists.
-        3. If there are math formulas, write them in LaTeX format enclosed in single dollar signs (e.g. $E = mc^2$).
+        3. Use LaTeX for math ($E=mc^2$).
         4. If an image is provided in the context, refer to "the diagram shown".
         5. Keep the explanation engaging but concise (under 150 words).
         
         If no context is provided, use a generic Nigerian example.
         """)
 
-        chain = prompt | ai_llm
+        chain = prompt | llm
         
         ai_reply = chain.invoke({
             "subject": request.subject,
