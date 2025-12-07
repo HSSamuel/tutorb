@@ -64,29 +64,37 @@ def clean_for_whatsapp(text):
     text = text.replace("$", "")
     return text.strip()
 
+# --- HELPER: RETRIEVE CONTEXT ---
+def get_context(subject: str, tools):
+    """Finds the cultural analogy for a given subject"""
+    supabase = tools["supabase"]
+    embeddings = tools["embeddings"]
+    
+    # Embed the query
+    query_vector = embeddings.embed_query(subject)
+    
+    # Search Database
+    response = supabase.rpc(
+        "match_cultural_knowledge",
+        {"query_embedding": query_vector, "match_threshold": 0.0, "match_count": 1}
+    ).execute()
+
+    if response.data:
+        match = response.data[0]
+        # Return the rich cultural context
+        return f"Use this local metaphor: {match['content']} (Region: {match['region']})", match.get('image_url')
+    
+    return "No specific local metaphor found.", None
+
 # --- REUSABLE BRAIN FUNCTION ---
 def ask_the_brain(subject: str, is_whatsapp: bool = False):
     try:
         tools = get_ai_tools()
-        supabase = tools["supabase"]
-        embeddings = tools["embeddings"]
         llm = tools["llm"]
         ChatPromptTemplate = tools["PromptTemplate"]
 
-        # 1. Search
-        query_vector = embeddings.embed_query(subject)
-        response = supabase.rpc(
-            "match_cultural_knowledge",
-            {"query_embedding": query_vector, "match_threshold": 0.0, "match_count": 1}
-        ).execute()
-
-        local_context = "No specific local metaphor found."
-        visual_url = None
-
-        if response.data:
-            match = response.data[0]
-            local_context = f"Use this local metaphor: {match['content']} (Region: {match['region']})"
-            visual_url = match.get('image_url')
+        # 1. Get Context
+        local_context, visual_url = get_context(subject, tools)
 
         # 2. Generate Prompt
         if is_whatsapp:
@@ -124,7 +132,7 @@ def ask_the_brain(subject: str, is_whatsapp: bool = False):
 
 @app.get("/")
 def home():
-    return {"status": "AI Tutor Brain is Online (Cloud + WhatsApp + Quiz) ☁️📱❓"}
+    return {"status": "AI Tutor Brain is Online (Contextual Quiz Mode) 🧠✨"}
 
 class TopicRequest(BaseModel):
     subject: str
@@ -139,19 +147,30 @@ async def teach_topic(request: TopicRequest):
         "visual_aid": image
     }
 
-# 2. QUIZ ENDPOINT (NEW)
+# 2. QUIZ ENDPOINT (UPDATED FOR PRECISION)
 @app.post("/quiz")
 async def generate_quiz(request: TopicRequest):
-    print(f"❓ Generating Quiz for: {request.subject}")
+    print(f"❓ Generating Contextual Quiz for: {request.subject}")
     try:
         tools = get_ai_tools()
         llm = tools["llm"]
         ChatPromptTemplate = tools["PromptTemplate"]
         
+        # 1. Retrieve the SAME context used for teaching
+        # This ensures the quiz asks about the Metaphor/Analogy too!
+        local_context, _ = get_context(request.subject, tools)
+        
         prompt = ChatPromptTemplate.from_template("""
         Generate 5 Multiple Choice Questions (MCQs) to test a student on: {subject}.
         
-        Strictly follow this JSON-like format for easy parsing (No Markdown code blocks):
+        CRITICAL INSTRUCTION:
+        Base the questions on this specific context/analogy if available:
+        "{context}"
+        
+        If the context mentions a Nigerian metaphor (e.g., Cooking, Traffic), 
+        at least 2 questions MUST reference that metaphor to test conceptual understanding.
+        
+        Strictly follow this JSON-like format for easy parsing (No intro text, No Markdown):
         
         Q1: [Question text]
         A) [Option A]
@@ -185,7 +204,10 @@ async def generate_quiz(request: TopicRequest):
         """)
         
         chain = prompt | llm
-        ai_reply = chain.invoke({"subject": request.subject})
+        ai_reply = chain.invoke({
+            "subject": request.subject,
+            "context": local_context # <--- FEEDING THE CONTEXT HERE
+        })
         
         return {"quiz": ai_reply.content}
         
