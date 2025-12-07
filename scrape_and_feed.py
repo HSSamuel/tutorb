@@ -1,5 +1,6 @@
 import os
 import requests
+import time # Add this import at the top
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
 from dotenv import load_dotenv
@@ -60,33 +61,56 @@ def get_text_from_pdf(pdf_path):
         return None
 
 def process_and_upload(text, source_name, region_tag="Global"):
-    """Chunks text and uploads to Supabase"""
+    """Chunks text and uploads to Supabase using BATCHING to save API credits"""
     if not text or len(text) < 100:
         print("   ⚠️ Text too short or empty. Skipping.")
         return
 
     # Chunking
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000, # Larger chunks for textbooks
+        chunk_size=1000,
         chunk_overlap=100,
         separators=["\n\n", "\n", ".", " "]
     )
     chunks = text_splitter.split_text(text)
     
-    print(f"   🔪 Split into {len(chunks)} chunks. Uploading...")
+    print(f"   🔪 Split into {len(chunks)} chunks. Generating Vectors...")
 
-    # Upload Loop
+    # --- BATCHING LOGIC STARTS HERE ---
+    
+    # 1. Generate Vectors in Batches
+    all_vectors = []
+    
+    # This sends less text per call, keeping you under the 100k token limit.
+    batch_size = 20  
+    
+    try:
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i : i + batch_size]
+            print(f"   ⚡ Embedding batch {i} to {i+len(batch)}...")
+            
+            # embed_documents sends the whole list in ONE call
+            batch_vectors = embeddings.embed_documents(batch)
+            all_vectors.extend(batch_vectors)
+            
+            # 👇 CHANGE 2: Increase sleep from 1 to 10 seconds
+            # This forces the script to wait, allowing your "minute quota" to reset.
+            time.sleep(10)
+            
+    except Exception as e:
+        print(f"   ❌ Error generating vectors: {e}")
+        return
+
+    # 2. Upload to Supabase (Now we have all vectors ready)
+    print(f"   💾 Uploading {len(chunks)} entries to Database...")
+    
     for i, chunk in enumerate(chunks):
-        # This now calls the Cohere API (Cloud) instead of your CPU
-        vector = embeddings.embed_query(chunk)
-        
-        # We append the source to the content so the AI knows where it learned this
         final_content = f"{chunk}\n(Source: {source_name})"
         
         supabase.table("cultural_knowledge").insert({
             "content": final_content,
             "region": region_tag,
-            "embedding": vector
+            "embedding": all_vectors[i]
         }).execute()
         
     print(f"   ✅ Finished uploading {source_name}!")
