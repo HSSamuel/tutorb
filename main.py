@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import os
-import re # <--- NEW IMPORT for text cleaning
+import re
 
 # 1. Load Env Vars
 load_dotenv()
@@ -25,6 +25,7 @@ ai_tools = None
 # --- HELPER: CLOUD LOADER ---
 def get_ai_tools():
     global ai_tools
+    
     if ai_tools is None:
         print("⏳ Connecting to Cloud AI...")
         from langchain_cohere import ChatCohere, CohereEmbeddings
@@ -52,23 +53,15 @@ def get_ai_tools():
             "llm": llm,
             "PromptTemplate": ChatPromptTemplate
         }
+        print("✅ AI Tools Ready!")
+        
     return ai_tools
 
 # --- HELPER: WHATSAPP CLEANER ---
 def clean_for_whatsapp(text):
-    """
-    Converts AI Markdown to WhatsApp-friendly format.
-    """
-    # 1. Convert Double Bold (**text**) to WhatsApp Bold (*text*)
     text = text.replace("**", "*")
-    
-    # 2. Convert Headers (### Header) to Uppercase Bold (*HEADER*)
-    # This finds hashtags, removes them, and wraps the text in stars
     text = re.sub(r'#+\s*(.*)', r'*\1*', text)
-    
-    # 3. Remove LaTeX Math ($...$) symbols, keep the equation
     text = text.replace("$", "")
-    
     return text.strip()
 
 # --- REUSABLE BRAIN FUNCTION ---
@@ -95,20 +88,9 @@ def ask_the_brain(subject: str, is_whatsapp: bool = False):
             local_context = f"Use this local metaphor: {match['content']} (Region: {match['region']})"
             visual_url = match.get('image_url')
 
-        # 2. Generate Prompt (UPDATED FOR BETTER FORMATTING)
+        # 2. Generate Prompt
         if is_whatsapp:
-             formatting_instruction = """
-             1. Start with a friendly emoji (e.g. 📚 or 💡).
-             2. Use SINGLE asterisks for bold keys: *like this* (NOT double **).
-             3. Use dashes (-) for list items.
-             4. NO LaTeX math. Write formulas plainly: E = mc^2.
-             5. Structure: 
-                *Metaphor*
-                (Explanation)
-                *Scientific Fact*
-                (Explanation)
-             6. Keep it under 100 words.
-             """
+             formatting_instruction = "Start with a friendly emoji. Use single * for bold. Use dashes for lists. No LaTeX. Keep under 100 words."
         else:
              formatting_instruction = "Use **Bold** for key terms. Use LaTeX for math ($E=mc^2$). Keep it under 150 words."
 
@@ -142,33 +124,80 @@ def ask_the_brain(subject: str, is_whatsapp: bool = False):
 
 @app.get("/")
 def home():
-    return {"status": "AI Tutor Brain is Online (Cloud + WhatsApp Ready) ☁️📱"}
+    return {"status": "AI Tutor Brain is Online (Cloud + WhatsApp + Quiz) ☁️📱❓"}
 
-# 1. WEB ENDPOINT (JSON)
 class TopicRequest(BaseModel):
     subject: str
 
+# 1. TEACH ENDPOINT
 @app.post("/teach")
 async def teach_topic(request: TopicRequest):
-    # Web uses is_whatsapp=False (Keeps Rich Markdown)
     answer, context, image = ask_the_brain(request.subject, is_whatsapp=False)
-    
     return {
         "response": answer,
         "source_data": context,
-        "visual_aid": image,
-        "model_used": "Cohere Command-R"
+        "visual_aid": image
     }
 
-# 2. WHATSAPP ENDPOINT (XML)
+# 2. QUIZ ENDPOINT (NEW)
+@app.post("/quiz")
+async def generate_quiz(request: TopicRequest):
+    print(f"❓ Generating Quiz for: {request.subject}")
+    try:
+        tools = get_ai_tools()
+        llm = tools["llm"]
+        ChatPromptTemplate = tools["PromptTemplate"]
+        
+        prompt = ChatPromptTemplate.from_template("""
+        Generate 5 Multiple Choice Questions (MCQs) to test a student on: {subject}.
+        
+        Strictly follow this JSON-like format for easy parsing (No Markdown code blocks):
+        
+        Q1: [Question text]
+        A) [Option A]
+        B) [Option B]
+        C) [Option C]
+        Answer: [Correct Letter]
+        
+        Q2: [Question text]
+        A) [Option A]
+        B) [Option B]
+        C) [Option C]
+        Answer: [Correct Letter]
+        
+        Q3: [Question text]
+        A) [Option A]
+        B) [Option B]
+        C) [Option C]
+        Answer: [Correct Letter]
+
+        Q4: [Question text]
+        A) [Option A]
+        B) [Option B]
+        C) [Option C]
+        Answer: [Correct Letter]
+
+        Q5: [Question text]
+        A) [Option A]
+        B) [Option B]
+        C) [Option C]
+        Answer: [Correct Letter]
+        """)
+        
+        chain = prompt | llm
+        ai_reply = chain.invoke({"subject": request.subject})
+        
+        return {"quiz": ai_reply.content}
+        
+    except Exception as e:
+        return {"error": str(e)}
+
+# 3. WHATSAPP ENDPOINT
 @app.post("/whatsapp")
 async def whatsapp_reply(Body: str = Form(...)):
     print(f"📩 WhatsApp Message: {Body}")
-    
-    # WhatsApp uses is_whatsapp=True (Clean Text)
     answer, context, image = ask_the_brain(Body, is_whatsapp=True)
     
-    # Twilio XML Response
     xml_response = "<Response><Message>"
     xml_response += f"<Body>{answer}</Body>"
     if image:
