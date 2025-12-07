@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Form, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -28,7 +28,7 @@ def get_ai_tools():
     
     if ai_tools is None:
         print("⏳ Connecting to Cloud AI...")
-        from langchain_cohere import ChatCohere, CohereEmbeddings # <--- USING COHERE FOR EVERYTHING
+        from langchain_cohere import ChatCohere, CohereEmbeddings
         from langchain_core.prompts import ChatPromptTemplate
         from supabase import create_client
         
@@ -40,8 +40,7 @@ def get_ai_tools():
         # Initialize
         supabase = create_client(supabase_url, supabase_key)
         
-        # 👇 LIGHTWEIGHT: No local model loading! 
-        # We use 'embed-english-light-v3.0' because it is 384 dimensions (matches our DB)
+        # LIGHTWEIGHT: Use Cloud Embeddings (No RAM Usage)
         print("⏳ Connecting to Cohere Embeddings API...")
         embeddings = CohereEmbeddings(
             model="embed-english-light-v3.0", 
@@ -61,31 +60,20 @@ def get_ai_tools():
         
     return ai_tools
 
-# --- ENDPOINTS ---
-
-@app.get("/")
-def home():
-    return {"status": "AI Tutor Brain is Online (Cloud Mode) ☁️"}
-
-class TopicRequest(BaseModel):
-    subject: str
-
-@app.post("/teach")
-async def teach_topic(request: TopicRequest):
-    print(f"🔍 Student asked about: {request.subject}")
-
+# --- REUSABLE BRAIN FUNCTION ---
+def ask_the_brain(subject: str, is_whatsapp: bool = False):
+    """
+    Core logic: Search Supabase -> Ask Cohere -> Return Answer
+    """
     try:
-        # 1. LOAD TOOLS
         tools = get_ai_tools()
         supabase = tools["supabase"]
         embeddings = tools["embeddings"]
         llm = tools["llm"]
         ChatPromptTemplate = tools["PromptTemplate"]
 
-        # A. SEARCH (Retrieval via API)
-        # This now sends the text to Cohere, gets numbers back, then sends to Supabase
-        query_vector = embeddings.embed_query(request.subject)
-        
+        # 1. Search (Retrieval)
+        query_vector = embeddings.embed_query(subject)
         response = supabase.rpc(
             "match_cultural_knowledge",
             {"query_embedding": query_vector, "match_threshold": 0.0, "match_count": 1}
@@ -98,41 +86,72 @@ async def teach_topic(request: TopicRequest):
             match = response.data[0]
             local_context = f"Use this local metaphor: {match['content']} (Region: {match['region']})"
             visual_url = match.get('image_url')
-            print(f"✅ Found context: {match['content'][:30]}...")
 
-        # B. GENERATE
+        # 2. Generate Prompt
+        # We adjust instructions slightly for WhatsApp (shorter) vs Web (richer)
+        formatting_instruction = (
+            "Keep it short (under 100 words). Use *bold* for emphasis." 
+            if is_whatsapp 
+            else "Use **Bold** for key terms. Use LaTeX for math ($E=mc^2$). Keep it under 150 words."
+        )
+
         prompt = ChatPromptTemplate.from_template("""
-        You are a Nigerian science tutor. You explain things clearly and structured.
+        You are a Nigerian science tutor. Explain clearly.
+        Student asks: {subject}
+        Context: {context}
         
-        The student wants to know about: {subject}
-        
-        STRICTLY use this local context to explain it:
-        {context}
-        
-        INSTRUCTIONS FOR FORMATTING:
-        1. Use **Bold** for key terms.
-        2. Use Bullet points for steps or lists.
-        3. Use LaTeX for math ($E=mc^2$).
-        4. If an image is provided in the context, refer to "the diagram shown".
-        5. Keep the explanation engaging but concise (under 150 words).
-        
-        If no context is provided, use a generic Nigerian example.
+        INSTRUCTIONS:
+        {formatting}
+        If an image is provided in context, refer to "the diagram".
         """)
 
         chain = prompt | llm
-        
         ai_reply = chain.invoke({
-            "subject": request.subject,
-            "context": local_context
+            "subject": subject, 
+            "context": local_context,
+            "formatting": formatting_instruction
         })
         
-        return {
-            "response": ai_reply.content,
-            "source_data": local_context,
-            "visual_aid": visual_url,
-            "model_used": "Cohere Command-R"
-        }
+        return ai_reply.content, local_context, visual_url
 
     except Exception as e:
         print(f"❌ Error: {e}")
-        return {"error": str(e)}
+        return f"Error: {str(e)}", "Error", None
+
+# --- ENDPOINTS ---
+
+@app.get("/")
+def home():
+    return {"status": "AI Tutor Brain is Online (Cloud + WhatsApp Ready) ☁️📱"}
+
+# 1. WEB ENDPOINT (JSON)
+class TopicRequest(BaseModel):
+    subject: str
+
+@app.post("/teach")
+async def teach_topic(request: TopicRequest):
+    print(f"🔍 Web Request: {request.subject}")
+    answer, context, image = ask_the_brain(request.subject, is_whatsapp=False)
+    
+    return {
+        "response": answer,
+        "source_data": context,
+        "visual_aid": image,
+        "model_used": "Cohere Command-R"
+    }
+
+# 2. WHATSAPP ENDPOINT (XML)
+@app.post("/whatsapp")
+async def whatsapp_reply(Body: str = Form(...)):
+    print(f"📩 WhatsApp Message: {Body}")
+    
+    answer, context, image = ask_the_brain(Body, is_whatsapp=True)
+    
+    # Twilio XML Response
+    xml_response = "<Response><Message>"
+    xml_response += f"<Body>{answer}</Body>"
+    if image:
+        xml_response += f"<Media>{image}</Media>"
+    xml_response += "</Message></Response>"
+    
+    return Response(content=xml_response, media_type="application/xml")
