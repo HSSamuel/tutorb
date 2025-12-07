@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Form, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from urllib.parse import quote  # <--- NEW: To format URLs safely
 from dotenv import load_dotenv
 import os
 import re
@@ -96,7 +97,15 @@ def ask_the_brain(subject: str, is_whatsapp: bool = False):
         # 1. Get Context
         local_context, visual_url = get_context(subject, tools)
 
-        # 2. Generate Prompt
+        # 2. IMAGE GENERATION FALLBACK (The Magic ✨)
+        # If Supabase didn't have an image, we generate one on the fly!
+        if not visual_url:
+            # Create a safe, encoded prompt for the image generator
+            # We ask for a "textbook style" vector illustration
+            img_prompt = quote(f"Educational diagram explaining {subject}, clear scientific vector illustration, white background, high quality, minimal text")
+            visual_url = f"https://image.pollinations.ai/prompt/{img_prompt}?nologo=true&width=1024&height=600"
+
+        # 3. Generate Prompt
         if is_whatsapp:
              formatting_instruction = "Start with a friendly emoji. Use single * for bold. Use dashes for lists. No LaTeX. Keep under 100 words."
         else:
